@@ -2939,6 +2939,17 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         const nodeId = getNodeId(node);
         return nodeLinks[nodeId] || (nodeLinks[nodeId] = new (NodeLinks as any)());
     }
+ 
+    function setResolvedOperator(node: BinaryExpression | PrefixUnaryExpression | ElementAccessExpression, sym: Symbol, name: __String, isInverted: boolean, isUnary: boolean, isAccess: boolean, isNegated: boolean, isCompoundAssignment: boolean) {
+        const links = getNodeLinks(node);
+        links.resolvedOperatorSymbol = sym;
+        links.resolvedOperatorMethodName = name;
+        links.resolvedOperatorIsInverted = isInverted;
+        links.resolvedOperatorIsUnary = isUnary;
+        links.resolvedOperatorIsAccess = isAccess;
+        links.resolvedOperatorIsNegated = isNegated;
+        links.resolvedOperatorIsCompoundAssignment = isCompoundAssignment;
+    }
 
     function getSymbol(symbols: SymbolTable, name: __String, meaning: SymbolFlags): Symbol | undefined {
         if (meaning) {
@@ -35541,6 +35552,37 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         const indexExpression = node.argumentExpression;
         const indexType = checkExpression(indexExpression);
 
+        const lhsApparent = getApparentType(getTypeOfExpression(node.expression));
+        const methodName = "run" as __String
+        const methodSym = getPropertyOfType(lhsApparent, methodName);
+        if (methodSym) {
+            const methodType = getTypeOfSymbolAtLocation(methodSym, node.expression);
+            const callSigs = getSignaturesOfType(methodType, SignatureKind.Call);
+            if (some(callSigs)) { 
+                for (const sig of callSigs) {
+                    const params = sig.parameters;
+                    if (params.length < 1) continue;
+
+                    const p0 = params[0];
+                    const p0Type = getTypeOfSymbolAtLocation(p0, node.argumentExpression);
+                    if (isTypeAssignableTo(getTypeOfExpression(node.argumentExpression), p0Type)) {
+                        const returnT = getReturnTypeOfSignature(sig);
+                        setResolvedOperator(
+                            node,
+                            methodSym,
+                            methodName,
+                            false,
+                            false,
+                            true,
+                            false,
+                            false
+                        )
+                        return returnT;
+                    }
+                }
+            }
+        }
+
         if (isErrorType(objectType) || objectType === silentNeverType) {
             return objectType;
         }
@@ -36192,6 +36234,12 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                 const checkArgType = checkMode & CheckMode.SkipContextSensitive ? getRegularTypeOfObjectLiteral(argType) : argType;
                 const effectiveCheckArgumentNode = getEffectiveCheckNode(arg);
                 if (!checkTypeRelatedToAndOptionallyElaborate(checkArgType, paramType, relation, reportErrors ? effectiveCheckArgumentNode : undefined, effectiveCheckArgumentNode, headMessage, containingMessageChain, errorOutputContainer)) {
+                    const liftedSig = tryImplicitFunctionLiftForArg(arg, paramType);
+                    if (liftedSig) {
+                        setImplicitLift(arg, liftedSig);   // record for emit
+                        continue;                          // treat this arg as compatible
+                    }
+
                     Debug.assert(!reportErrors || !!errorOutputContainer.errors, "parameter should have errors when reporting errors");
                     maybeAddMissingAwaitInfo(arg, checkArgType, paramType);
                     return errorOutputContainer.errors || emptyArray;
@@ -36224,6 +36272,24 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     addRelatedInfo(errorOutputContainer.errors[0], createDiagnosticForNode(errorNode, Diagnostics.Did_you_forget_to_use_await));
                 }
             }
+        }
+
+        function tryImplicitFunctionLiftForArg(argExpr: Expression, paramType: Type): Signature | undefined {
+            const paramSigs = getSignaturesOfType(paramType, SignatureKind.Call);
+            if (!paramSigs.length) return;
+            const argT = getTypeOfExpression(argExpr);
+            if (getSignaturesOfType(argT, SignatureKind.Call).length) return;
+
+            for (const sig of paramSigs) {
+                const ret = getReturnTypeOfSignature(sig);
+                if (isTypeAssignableTo(argT, ret))
+                    return sig;
+            }
+        }
+                
+        function setImplicitLift(node: Expression, sig: Signature) {
+            const links = getNodeLinks(node);
+            links.implicitLiftSignature = sig;
         }
     }
 
@@ -39987,6 +40053,29 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         if (operandType === silentNeverType) {
             return silentNeverType;
         }
+        const methodName = getUnaryOperatorMethodName(node.operator);
+        if (methodName) {
+            const apparent = getApparentType(operandType);
+            const methodSym = getPropertyOfType(apparent, methodName);
+            if (methodSym) {
+                const mType = getTypeOfSymbolAtLocation(methodSym, node.operand);
+                const sigs = getSignaturesOfType(mType, SignatureKind.Call);
+                const match = firstDefined(sigs, sig => sig.parameters.length === 0 ? sig : undefined);
+                if (match) {
+                    setResolvedOperator(
+                        node,
+                        methodSym,
+                        methodName,
+                        false,
+                        true,
+                        false,
+                        false,
+                        false
+                    )
+                    return getReturnTypeOfSignature(match);
+                }
+            }
+        }
         switch (node.operand.kind) {
             case SyntaxKind.NumericLiteral:
                 switch (node.operator) {
@@ -40711,6 +40800,58 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         return checkBinaryLikeExpressionWorker(left, operatorToken, right, leftType, rightType, checkMode, errorNode);
     }
 
+    function tryResolveBinaryOperatorOverload(
+        operatorToken: BinaryOperatorToken,
+        methodName: __String | undefined,
+        left: Expression,
+        right: Expression,
+        leftType: Type,
+        rightType: Type,
+        inverted: boolean,
+        isNegated: boolean,
+        isCompoundAssignment: boolean
+    ): Type | undefined {
+        if (!methodName) return undefined;
+       
+        const lhsApparent = getApparentType(leftType);
+        const methodSym = getPropertyOfType(lhsApparent, methodName);
+        if (!methodSym) return undefined;
+
+        const methodType = getTypeOfSymbolAtLocation(methodSym, left);
+        const callSigs = getSignaturesOfType(methodType, SignatureKind.Call);
+        if (!some(callSigs)) {
+            return undefined;
+        }
+
+        for (const sig of callSigs) {
+            const params = sig.parameters;
+            if (params.length < 1) continue;
+
+            const p0 = params[0];
+            const p0Type = getTypeOfSymbolAtLocation(p0, right);
+            if (isTypeAssignableTo(rightType, p0Type)) {
+                const returnT = getReturnTypeOfSignature(sig);
+
+                const parent = operatorToken.parent;
+                if (isBinaryExpression(parent)) {
+                    setResolvedOperator(
+                        parent,
+                        methodSym,
+                        methodName,
+                        inverted,
+                        false,
+                        false,
+                        isNegated,
+                        isCompoundAssignment
+                    )
+                    return returnT;
+                }
+            }
+        }
+
+        return undefined;
+    }
+
     function checkBinaryLikeExpressionWorker(
         left: Expression,
         operatorToken: BinaryOperatorToken,
@@ -40721,6 +40862,8 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         errorNode?: Node,
     ): Type {
         const operator = operatorToken.kind;
+        const operatorIsNegated = operator === SyntaxKind.ExclamationEqualsToken || operator === SyntaxKind.ExclamationEqualsEqualsToken;
+        const operatorIsCompoundAssignment = isCompoundAssignment(operator);
         switch (operator) {
             case SyntaxKind.AsteriskToken:
             case SyntaxKind.AsteriskAsteriskToken:
@@ -40750,6 +40893,30 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
 
                 leftType = checkNonNullType(leftType, left);
                 rightType = checkNonNullType(rightType, right);
+               
+                let resultTypeOverloaded = tryResolveBinaryOperatorOverload(
+                    operatorToken,
+                    getBinaryOperatorMethodName(operator, false),
+                    left, right,
+                    leftType, rightType,
+                    false,
+                    operatorIsNegated,
+                    operatorIsCompoundAssignment
+                )
+                if (!resultTypeOverloaded) {
+                    resultTypeOverloaded = tryResolveBinaryOperatorOverload(
+                        operatorToken,
+                        getBinaryOperatorMethodName(operator, true),
+                        right, left,
+                        rightType, leftType,
+                        true,
+                        operatorIsNegated,
+                        operatorIsCompoundAssignment
+                    )
+                }
+                if (resultTypeOverloaded) {
+                    return resultTypeOverloaded;
+                }
 
                 let suggestedOperator: PunctuationSyntaxKind | undefined;
                 // if a user tries to apply a bitwise operator to 2 boolean operands
@@ -40851,7 +41018,28 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     // Otherwise, the result is of type Any.
                     // NOTE: unknown type here denotes error type. Old compiler treated this case as any type so do we.
                     resultType = isErrorType(leftType) || isErrorType(rightType) ? errorType : anyType;
-                }
+                } else {
+                    resultType = tryResolveBinaryOperatorOverload(
+                        operatorToken,
+                        getBinaryOperatorMethodName(operator, false),
+                        left, right,
+                        leftType, rightType,
+                        false,
+                        operatorIsNegated,
+                        operatorIsCompoundAssignment
+                    )
+                    if (!resultType) {
+                        resultType = tryResolveBinaryOperatorOverload(
+                            operatorToken,
+                            getBinaryOperatorMethodName(operator, true),
+                            right, left,
+                            rightType, leftType,
+                            true,
+                            operatorIsNegated,
+                            operatorIsCompoundAssignment
+                        )
+                    }
+                 }
 
                 // Symbols are not allowed at all in arithmetic expressions
                 if (resultType && !checkForDisallowedESSymbolOperand(operator)) {
@@ -40896,7 +41084,30 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
             case SyntaxKind.EqualsEqualsToken:
             case SyntaxKind.ExclamationEqualsToken:
             case SyntaxKind.EqualsEqualsEqualsToken:
-            case SyntaxKind.ExclamationEqualsEqualsToken:
+            case SyntaxKind.ExclamationEqualsEqualsToken: {
+                let eqOverload = tryResolveBinaryOperatorOverload(
+                    operatorToken,
+                    getBinaryOperatorMethodName(operator, false),
+                    left, right,
+                    leftType, rightType,
+                    false,
+                    operatorIsNegated,
+                    operatorIsCompoundAssignment
+                );
+                if (!eqOverload) {
+                    eqOverload = tryResolveBinaryOperatorOverload(
+                        operatorToken,
+                        getBinaryOperatorMethodName(operator, true),
+                        right, left,
+                        rightType, leftType,
+                        true,
+                        operatorIsNegated,
+                        operatorIsCompoundAssignment
+                    );
+                }
+                if (eqOverload) {
+                    return eqOverload;
+                }
                 // We suppress errors in CheckMode.TypeOnly (meaning the invocation came from getTypeOfExpression). During
                 // control flow analysis it is possible for operands to temporarily have narrower types, and those narrower
                 // types may cause the operands to not be comparable. We don't want such errors reported (see #46475).
@@ -40913,6 +41124,7 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     reportOperatorErrorUnless((left, right) => isTypeEqualityComparableTo(left, right) || isTypeEqualityComparableTo(right, left));
                 }
                 return booleanType;
+            }
             case SyntaxKind.InstanceOfKeyword:
                 return checkInstanceOfExpression(left, right, leftType, rightType, checkMode);
             case SyntaxKind.InKeyword:
@@ -51517,6 +51729,19 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
             symbolToDeclarations: (symbol, meaning, flags, maximumLength, verbosityLevel, out) => {
                 return nodeBuilder.symbolToDeclarations(symbol, meaning, flags, maximumLength, verbosityLevel, out);
             },
+            getResolvedOperatorInfo(node: Node) {
+                const links = getNodeLinks(node as any);
+                const name = (links as any).resolvedOperatorMethodName as __String | undefined;
+                const isUnary = !!(links as any).resolvedOperatorIsUnary;
+                const isInverted = !!(links as any).resolvedOperatorIsInverted;
+                const isAccess = !!(links as any).resolvedOperatorIsAccess;
+                const isNegated = !!(links as any).resolvedOperatorIsNegated;
+                const isCompoundAssignment = !!(links as any).resolvedOperatorIsCompoundAssignment;
+                return name ? { name, isUnary, isInverted, isAccess, isNegated, isCompoundAssignment } : undefined;
+            },
+            getImplicitLift(node: Node) {
+                return getNodeLinks(node as any)?.implicitLiftSignature;
+            }
         };
 
         function isImportRequiredByAugmentation(node: ImportDeclaration) {
@@ -54245,6 +54470,51 @@ function getIterationTypesKeyFromIterationTypeKind(typeKind: IterationTypeKind) 
             return "returnType";
         case IterationTypeKind.Next:
             return "nextType";
+    }
+}
+ 
+export function getBinaryOperatorMethodName(op: SyntaxKind, inverted: boolean): __String | undefined {
+    switch (op) {
+        case SyntaxKind.PlusToken: 
+        case SyntaxKind.PlusEqualsToken:
+            return "plus" as __String;
+        case SyntaxKind.MinusToken:
+        case SyntaxKind.MinusEqualsToken:
+            return "minus" as __String;
+        case SyntaxKind.AsteriskToken:
+        case SyntaxKind.AsteriskEqualsToken:
+            return "times" as __String;
+        case SyntaxKind.SlashToken:
+        case SyntaxKind.SlashEqualsToken:
+            if (inverted)
+                return "invDiv" as __String;
+            else
+                return "div" as __String;
+        case SyntaxKind.PercentToken:
+        case SyntaxKind.PercentEqualsToken:
+            return "rem" as __String;
+        case SyntaxKind.EqualsEqualsToken:
+        case SyntaxKind.ExclamationEqualsToken:
+            return "equals" as __String;
+        case SyntaxKind.EqualsEqualsEqualsToken:
+        case SyntaxKind.ExclamationEqualsEqualsToken:
+            return "exactEquals" as __String;
+        case SyntaxKind.CaretToken:
+        case SyntaxKind.CaretEqualsToken:
+            return "pow" as __String;
+        default: return undefined
+    }
+}
+
+export function getUnaryOperatorMethodName(op: SyntaxKind): __String | undefined {
+    switch (op) {
+        case SyntaxKind.PlusToken:
+            return "unaryPlus" as __String;
+        case SyntaxKind.MinusToken:
+            return "unaryMinus" as __String;
+        case SyntaxKind.ExclamationToken:
+            return "not" as __String;
+        default: return undefined
     }
 }
 

@@ -1,8 +1,8 @@
 {
-    "name": "typescript",
+    "name": "@operated/typescript",
     "author": "Microsoft Corp.",
     "homepage": "https://www.typescriptlang.org/",
-    "version": "6.0.0",
+    "version": "6.0.1",
     "license": "Apache-2.0",
     "description": "TypeScript is a language for application scale JavaScript development",
     "keywords": [

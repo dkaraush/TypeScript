@@ -347,6 +347,11 @@ import {
     updateSourceFile,
     UserPreferences,
     VariableDeclaration,
+    getBinaryOperatorMethodName,
+    isBinaryExpression,
+    getUnaryOperatorMethodName,
+    isPrefixUnaryExpression,
+    isNamedDeclaration
 } from "./_namespaces/ts.js";
 import * as NavigateTo from "./_namespaces/ts.NavigateTo.js";
 import * as NavigationBar from "./_namespaces/ts.NavigationBar.js";
@@ -2278,13 +2283,71 @@ export function createLanguageService(
         synchronizeHostData();
 
         const sourceFile = getValidSourceFile(fileName);
-        const node = getTouchingPropertyName(sourceFile, position);
+        let node = getTouchingPropertyName(sourceFile, position);
         if (node === sourceFile) {
             // Avoid giving quickInfo for the sourceFile as a whole.
             return undefined;
         }
 
         const typeChecker = program.getTypeChecker();
+        if (getBinaryOperatorMethodName(node.kind, false)) {
+            const bin = findAncestor(node, isBinaryExpression);
+            if (bin && node === bin.operatorToken) {
+                const opName = getBinaryOperatorMethodName(node.kind, false)! as string;
+    
+                const lhsT = typeChecker.getTypeAtLocation(bin.left);
+                const rhsT = typeChecker.getTypeAtLocation(bin.right);
+    
+                const lhsApp = typeChecker.getApparentType(lhsT);
+                const methodSym = typeChecker.getPropertyOfType(lhsApp, opName);
+                if (methodSym) {
+                    const methodType = typeChecker.getTypeOfSymbolAtLocation(methodSym, bin.left);
+                    const sigs = typeChecker.getSignaturesOfType(methodType, SignatureKind.Call);
+
+                    const match = firstDefined(sigs, sig => {
+                        const p0 = sig.parameters[0];
+                        if (!p0) return undefined;
+                        const p0Type = typeChecker.getTypeOfSymbolAtLocation(p0, bin.right);
+                        return typeChecker.isTypeAssignableTo(rhsT, p0Type) ? sig : undefined;
+                    });
+    
+                    if (match) {
+                        const decls = methodSym.declarations || emptyArray;
+                        if (decls.length) {
+                            const decl = decls[0]
+                            const nameNode = (isNamedDeclaration(decl) && decl.name) ? decl.name : decl
+                            if (nameNode) {
+                                node = nameNode
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (getUnaryOperatorMethodName(node.kind)) {
+            const bin = findAncestor(node, isPrefixUnaryExpression);
+            if (bin) {
+                const opName = getUnaryOperatorMethodName(node.kind)! as string;
+                const operandType = typeChecker.getTypeAtLocation(bin.operand);
+                const operandApp = typeChecker.getApparentType(operandType);
+                const methodSym = typeChecker.getPropertyOfType(operandApp, opName);
+                if (methodSym) {
+                    const methodType = typeChecker.getTypeOfSymbolAtLocation(methodSym, bin.operand);
+                    const sigs = typeChecker.getSignaturesOfType(methodType, SignatureKind.Call);
+                    if (sigs.length) {
+                        const decls = methodSym.declarations || emptyArray;
+                        if (decls.length) {
+                            const decl = decls[0]
+                            const nameNode = (isNamedDeclaration(decl) && decl.name) ? decl.name : decl
+                            if (nameNode) {
+                                node = nameNode
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         const nodeForQuickInfo = getNodeForQuickInfo(node);
         const symbol = getSymbolAtLocationForQuickInfo(nodeForQuickInfo, typeChecker);
         if (!symbol || typeChecker.isUnknownSymbol(symbol)) {

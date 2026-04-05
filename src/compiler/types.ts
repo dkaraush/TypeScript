@@ -5936,6 +5936,8 @@ export interface EmitResolver {
     isDefinitelyReferenceToGlobalSymbolObject(node: Node): boolean;
     createLateBoundIndexSignatures(cls: ClassLikeDeclaration, enclosingDeclaration: Node, flags: NodeBuilderFlags, internalFlags: InternalNodeBuilderFlags, tracker: SymbolTracker): (IndexSignatureDeclaration | PropertyDeclaration)[] | undefined;
     symbolToDeclarations(symbol: Symbol, meaning: SymbolFlags, flags: NodeBuilderFlags, maximumLength?: number, verbosityLevel?: number, out?: WriterContextOut): Declaration[];
+    getResolvedOperatorInfo(node: Node): { name: string, isUnary: boolean, isInverted: boolean, isAccess: boolean, isNegated: boolean, isCompoundAssignment: boolean } | undefined
+    getImplicitLift(node: Node): Signature | undefined
 }
 
 // dprint-ignore
@@ -6308,6 +6310,14 @@ export interface NodeLinks {
     externalHelpersModule?: Symbol;     // Resolved symbol for the external helpers module
     instantiationExpressionTypes?: Map<number, Type>; // Cache of instantiation expression types for the node
     nonExistentPropCheckCache?: Set<string>;
+    resolvedOperatorSymbol?: Symbol;
+    resolvedOperatorMethodName?: __String;
+    resolvedOperatorIsInverted?: boolean;
+    resolvedOperatorIsUnary?: boolean;
+    resolvedOperatorIsAccess?: boolean;
+    resolvedOperatorIsNegated?: boolean;
+    resolvedOperatorIsCompoundAssignment?: boolean;
+    implicitLiftSignature?: Signature;
 }
 
 /** @internal */

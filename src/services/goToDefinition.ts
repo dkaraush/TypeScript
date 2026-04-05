@@ -22,6 +22,7 @@ import {
     FindAllReferences,
     findAncestor,
     first,
+    firstDefined,
     flatMap,
     forEach,
     FunctionLikeDeclaration,
@@ -33,6 +34,7 @@ import {
     getNameFromPropertyName,
     getNameOfDeclaration,
     getObjectFlags,
+    getBinaryOperatorMethodName,
     getPropertySymbolsFromContextualType,
     getTargetLabel,
     getTextOfPropertyName,
@@ -44,6 +46,7 @@ import {
     isAnyImportOrBareOrAccessedRequire,
     isAssignmentDeclaration,
     isAssignmentExpression,
+    isBinaryExpression,
     isBindingElement,
     isCallLikeExpression,
     isCallOrNewExpressionTarget,
@@ -96,6 +99,7 @@ import {
     resolvePath,
     ScriptElementKind,
     SignatureDeclaration,
+    SignatureKind,
     skipAlias,
     skipParentheses,
     skipTrivia,
@@ -115,6 +119,9 @@ import {
     TypeFlags,
     TypeReference,
     unescapeLeadingUnderscores,
+    getUnaryOperatorMethodName,
+    isUnaryExpression,
+    isPrefixUnaryExpression,
 } from "./_namespaces/ts.js";
 
 /** @internal */
@@ -138,6 +145,60 @@ export function getDefinitionAtPosition(program: Program, sourceFile: SourceFile
         const def = getDefinitionFromOverriddenMember(typeChecker, node);
         if (def !== undefined || node.kind !== SyntaxKind.OverrideKeyword) {
             return def || emptyArray;
+        }
+    }
+
+    if (getBinaryOperatorMethodName(node.kind, false)) {
+        const bin = findAncestor(node, isBinaryExpression);
+        if (bin && node === bin.operatorToken) {
+            const opName = getBinaryOperatorMethodName(node.kind, false)! as string;
+
+            const lhsT = typeChecker.getTypeAtLocation(bin.left);
+            const rhsT = typeChecker.getTypeAtLocation(bin.right);
+
+            const lhsApp = typeChecker.getApparentType(lhsT);
+            const methodSym = typeChecker.getPropertyOfType(lhsApp, opName);
+            if (methodSym) {
+                const methodType = typeChecker.getTypeOfSymbolAtLocation(methodSym, bin.left);
+                const sigs = typeChecker.getSignaturesOfType(methodType, SignatureKind.Call);
+
+                const match = firstDefined(sigs, sig => {
+                    const p0 = sig.parameters[0];
+                    if (!p0) return undefined;
+                    const p0Type = typeChecker.getTypeOfSymbolAtLocation(p0, bin.right);
+                    return typeChecker.isTypeAssignableTo(rhsT, p0Type) ? sig : undefined;
+                });
+
+                if (match) {
+                    const decls = methodSym.declarations || emptyArray;
+                    if (decls.length) {
+                        return flatMap(decls, d =>
+                            getDefinitionFromSymbol(typeChecker, d.symbol, node)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if (getUnaryOperatorMethodName(node.kind)) {
+        const bin = findAncestor(node, isPrefixUnaryExpression);
+        if (bin) {
+            const opName = getUnaryOperatorMethodName(node.kind)! as string;
+            const operandType = typeChecker.getTypeAtLocation(bin.operand);
+            const operandApp = typeChecker.getApparentType(operandType);
+            const methodSym = typeChecker.getPropertyOfType(operandApp, opName);
+            if (methodSym) {
+                const methodType = typeChecker.getTypeOfSymbolAtLocation(methodSym, bin.operand);
+                const sigs = typeChecker.getSignaturesOfType(methodType, SignatureKind.Call);
+                if (sigs.length) {
+                    const decls = methodSym.declarations || emptyArray;
+                    if (decls.length) {
+                        return flatMap(decls, d =>
+                            getDefinitionFromSymbol(typeChecker, d.symbol, node)
+                        );
+                    }
+                }
+            }
         }
     }
 
