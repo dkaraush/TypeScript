@@ -2,7 +2,7 @@
     "name": "@operated/typescript",
     "author": "Microsoft Corp.",
     "homepage": "https://www.typescriptlang.org/",
-    "version": "6.0.1",
+    "version": "6.0.3",
     "license": "Apache-2.0",
     "description": "TypeScript is a language for application scale JavaScript development",
     "keywords": [
@@ -13,11 +13,11 @@
         "javascript"
     ],
     "bugs": {
-        "url": "https://github.com/microsoft/TypeScript/issues"
+        "url": "https://github.com/dkaraush/TypeScript/issues"
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/microsoft/TypeScript.git"
+        "url": "https://github.com/dkaraush/TypeScript.git"
     },
     "main": "./lib/typescript.js",
     "typings": "./lib/typescript.d.ts",

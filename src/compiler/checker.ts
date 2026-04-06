@@ -41039,6 +41039,9 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                             operatorIsCompoundAssignment
                         )
                     }
+                    if (resultType) {
+                        return resultType;
+                    }
                  }
 
                 // Symbols are not allowed at all in arithmetic expressions

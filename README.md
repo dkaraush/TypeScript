@@ -8,7 +8,7 @@ npm install -D typescript@npm:@operated/typescript
 And for VS Code:
 - Ctrl/⌘+Shift+P
 - Open Settings
-- Type in Search "typescript tsdk"
+- Type in Search "tsdk"
 - Put path `{your_project}/node_modules/typescript/lib/`
 - Restart VS Code
 
