@@ -1187,7 +1187,8 @@ export const notImplementedResolver: EmitResolver = {
     createLateBoundIndexSignatures: notImplemented,
     symbolToDeclarations: notImplemented,
     getResolvedOperatorInfo: notImplemented,
-    getImplicitLift: notImplemented
+    getImplicitLift: notImplemented,
+    getImplicitThisInfo: notImplemented,
 };
 
 const enum PipelinePhase {

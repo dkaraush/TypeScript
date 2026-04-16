@@ -3250,7 +3250,13 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         nameNotFoundMessage: DiagnosticMessage,
     ) {
         const name = isString(nameArg) ? nameArg : (nameArg as Identifier).escapedText;
+        if (errorLocation && isIdentifier(errorLocation) && (meaning & SymbolFlags.Value) && tryResolveImplicitThisMember(errorLocation)) {
+            return;
+        }
         addLazyDiagnostic(() => {
+            if (errorLocation && isIdentifier(errorLocation) && tryResolveImplicitThisMember(errorLocation)) {
+                return;
+            }
             if (
                 !errorLocation ||
                 errorLocation.parent.kind !== SyntaxKind.JSDocLink &&
@@ -27782,17 +27788,86 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
     function getResolvedSymbol(node: Identifier): Symbol {
         const links = getNodeLinks(node);
         if (!links.resolvedSymbol) {
-            links.resolvedSymbol = !nodeIsMissing(node) &&
-                    resolveName(
-                        node,
-                        node,
-                        SymbolFlags.Value | SymbolFlags.ExportValue,
-                        getCannotFindNameDiagnosticForName(node),
-                        !isWriteOnlyAccess(node),
-                        /*excludeGlobals*/ false,
-                    ) || unknownSymbol;
+            if (nodeIsMissing(node)) {
+                links.resolvedSymbol = unknownSymbol;
+                return links.resolvedSymbol;
+            }
+            const resolved = resolveName(
+                node,
+                node,
+                SymbolFlags.Value | SymbolFlags.ExportValue,
+                getCannotFindNameDiagnosticForName(node),
+                !isWriteOnlyAccess(node),
+                /*excludeGlobals*/ false,
+            );
+            if (resolved) {
+                links.resolvedSymbol = resolved;
+            }
+            else {
+                const implicit = tryResolveImplicitThisMember(node);
+                if (implicit) {
+                    links.resolvedSymbol = implicit;
+                    links.isImplicitThisReference = true;
+                    (getCheckFlags(implicit) & CheckFlags.Instantiated ? getSymbolLinks(implicit).target : implicit)!.isReferenced = SymbolFlags.All;
+                }
+                else {
+                    links.resolvedSymbol = unknownSymbol;
+                }
+            }
         }
         return links.resolvedSymbol;
+    }
+
+    function tryResolveImplicitThisMember(node: Identifier): Symbol | undefined {
+        const name = node.escapedText;
+        if (!name) return undefined;
+        if (node.parent && (isTypeNode(node.parent) || isTypeQueryNode(node.parent))) return undefined;
+        const parent = node.parent;
+        if (!parent) return undefined;
+        if (isRightSideOfQualifiedNameOrPropertyAccess(node)) return undefined;
+        if (isDeclarationName(node)) return undefined;
+        if (isImportOrExportSpecifier(parent) || isImportClause(parent) || isImportEqualsDeclaration(parent)) return undefined;
+
+        let cur: Node = node;
+        while (cur.parent) {
+            const p: Node = cur.parent;
+            if (p.kind === SyntaxKind.ArrowFunction) {
+                cur = p;
+                continue;
+            }
+            if (
+                p.kind === SyntaxKind.FunctionDeclaration ||
+                p.kind === SyntaxKind.FunctionExpression
+            ) {
+                return undefined;
+            }
+            if (isClassElement(p) && p.parent && isClassLike(p.parent)) {
+                const classNode = p.parent as ClassLikeDeclaration;
+                const isStatic = hasStaticModifier(p) || p.kind === SyntaxKind.ClassStaticBlockDeclaration;
+                const sym = lookupImplicitClassMember(classNode, name, isStatic);
+                if (sym) {
+                    const links = getNodeLinks(node);
+                    links.implicitThisIsStatic = isStatic;
+                    const className = classNode.name ? idText(classNode.name) : undefined;
+                    links.implicitThisClassName = className;
+                }
+                return sym;
+            }
+            cur = p;
+            if (cur.kind === SyntaxKind.SourceFile) return undefined;
+        }
+        return undefined;
+    }
+
+    function lookupImplicitClassMember(classNode: ClassLikeDeclaration, name: __String, isStatic: boolean): Symbol | undefined {
+        const classSymbol = getSymbolOfDeclaration(classNode);
+        if (!classSymbol) return undefined;
+        if (isStatic) {
+            const staticType = getTypeOfSymbol(classSymbol);
+            return getPropertyOfType(staticType, name);
+        }
+        const instanceType = getDeclaredTypeOfClassOrInterface(classSymbol);
+        return getPropertyOfType(instanceType, name);
     }
 
     function isInAmbientOrTypeNode(node: Node): boolean {
@@ -31129,7 +31204,8 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         if (assignmentKind) {
             if (
                 !(localOrExportSymbol.flags & SymbolFlags.Variable) &&
-                !(isInJSFile(node) && localOrExportSymbol.flags & SymbolFlags.ValueModule)
+                !(isInJSFile(node) && localOrExportSymbol.flags & SymbolFlags.ValueModule) &&
+                !getNodeLinks(node).isImplicitThisReference
             ) {
                 const assignmentError = localOrExportSymbol.flags & SymbolFlags.Enum ? Diagnostics.Cannot_assign_to_0_because_it_is_an_enum
                     : localOrExportSymbol.flags & SymbolFlags.Class ? Diagnostics.Cannot_assign_to_0_because_it_is_a_class
@@ -50292,7 +50368,11 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     const symbol = getIntrinsicTagSymbol(name.parent as JsxOpeningLikeElement);
                     return symbol === unknownSymbol ? undefined : symbol;
                 }
-                const result = resolveEntityName(name, meaning, /*ignoreErrors*/ true, /*dontResolveAlias*/ true, getHostSignatureFromJSDoc(name));
+                let result = resolveEntityName(name, meaning, /*ignoreErrors*/ true, /*dontResolveAlias*/ true, getHostSignatureFromJSDoc(name));
+                if (!result && !isJSDoc) {
+                    const implicit = tryResolveImplicitThisMember(name);
+                    if (implicit) result = implicit;
+                }
                 if (!result && isJSDoc) {
                     const container = findAncestor(name, or(isClassLike, isInterfaceDeclaration));
                     if (container) {
@@ -51744,7 +51824,15 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
             },
             getImplicitLift(node: Node) {
                 return getNodeLinks(node as any)?.implicitLiftSignature;
-            }
+            },
+            getImplicitThisInfo(node: Node) {
+                const links = getNodeLinks(node as any);
+                if (!links || !(links as any).isImplicitThisReference) return undefined;
+                return {
+                    isStatic: !!(links as any).implicitThisIsStatic,
+                    className: (links as any).implicitThisClassName as string | undefined,
+                };
+            },
         };
 
         function isImportRequiredByAugmentation(node: ImportDeclaration) {

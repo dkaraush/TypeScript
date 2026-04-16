@@ -188,6 +188,14 @@ function collectTokens(program: Program, sourceFile: SourceFile, span: TextSpan,
                         if ((typeIdx === TokenType.variable || typeIdx === TokenType.function) && isLocalDeclaration(decl, sourceFile)) {
                             modifierSet |= 1 << TokenModifier.local;
                         }
+                        if (
+                            (typeIdx === TokenType.property || typeIdx === TokenType.member) &&
+                            isIdentifier(node) &&
+                            !isRightSideOfQualifiedNameOrPropertyAccess(node) &&
+                            !(node.parent && (node.parent as NamedDeclaration).name === node)
+                        ) {
+                            modifierSet |= 1 << TokenModifier.local;
+                        }
                         if (program.isSourceFileDefaultLibrary(decl.getSourceFile())) {
                             modifierSet |= 1 << TokenModifier.defaultLibrary;
                         }

@@ -76,6 +76,7 @@ import {
 import * as performance from "./_namespaces/ts.performance.js";
 import { transformOperatorOverloads } from "./transformers/operatorOverloads";
 import { transformImplicitLifts } from "./transformers/implicitLifts";
+import { transformImplicitThis } from "./transformers/implicitThis";
 
 function getModuleTransformer(moduleKind: ModuleKind): TransformerFactory<SourceFile | Bundle> {
     switch (moduleKind) {
@@ -140,6 +141,7 @@ function getScriptTransformers(compilerOptions: CompilerOptions, customTransform
 
     transformers.push(transformOperatorOverloads);
     transformers.push(transformImplicitLifts);
+    transformers.push(transformImplicitThis);
 
     if (compilerOptions.experimentalDecorators) {
         transformers.push(transformLegacyDecorators);

@@ -4045,12 +4045,10 @@ function getCompletionData(
             }
         }
 
-        // Need to insert 'this.' before properties of `this` type, so only do that if `includeInsertTextCompletions`
-        if (preferences.includeCompletionsWithInsertText && scopeNode.kind !== SyntaxKind.SourceFile) {
+        if (scopeNode.kind !== SyntaxKind.SourceFile) {
             const thisType = typeChecker.tryGetThisTypeAt(scopeNode, /*includeGlobalThis*/ false, isClassLike(scopeNode.parent) ? scopeNode as ThisContainer : undefined);
             if (thisType && !isProbablyGlobalType(thisType, sourceFile, typeChecker)) {
                 for (const symbol of getPropertiesForCompletion(thisType, typeChecker)) {
-                    symbolToOriginInfoMap[symbols.length] = { kind: SymbolOriginInfoKind.ThisType };
                     symbols.push(symbol);
                     symbolToSortTextMap[getSymbolId(symbol)] = SortText.SuggestedClassMembers;
                 }

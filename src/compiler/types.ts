@@ -5938,6 +5938,7 @@ export interface EmitResolver {
     symbolToDeclarations(symbol: Symbol, meaning: SymbolFlags, flags: NodeBuilderFlags, maximumLength?: number, verbosityLevel?: number, out?: WriterContextOut): Declaration[];
     getResolvedOperatorInfo(node: Node): { name: string, isUnary: boolean, isInverted: boolean, isAccess: boolean, isNegated: boolean, isCompoundAssignment: boolean } | undefined
     getImplicitLift(node: Node): Signature | undefined
+    getImplicitThisInfo(node: Node): { isStatic: boolean, className: string | undefined } | undefined
 }
 
 // dprint-ignore
@@ -6318,6 +6319,9 @@ export interface NodeLinks {
     resolvedOperatorIsNegated?: boolean;
     resolvedOperatorIsCompoundAssignment?: boolean;
     implicitLiftSignature?: Signature;
+    isImplicitThisReference?: boolean;
+    implicitThisIsStatic?: boolean;
+    implicitThisClassName?: string;
 }
 
 /** @internal */
