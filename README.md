@@ -9,7 +9,7 @@ And for VS Code:
 - Ctrl/⌘+Shift+P
 - Open Settings
 - Type in Search "tsdk"
-- Put path `{your_project}/node_modules/typescript/lib/`
+- Put path `./node_modules/typescript/lib/`
 - Restart VS Code
 
 ## Usage

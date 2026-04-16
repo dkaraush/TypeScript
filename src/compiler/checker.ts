@@ -27809,6 +27809,7 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     links.resolvedSymbol = implicit;
                     links.isImplicitThisReference = true;
                     (getCheckFlags(implicit) & CheckFlags.Instantiated ? getSymbolLinks(implicit).target : implicit)!.isReferenced = SymbolFlags.All;
+                    checkImplicitThisAccessibility(node, implicit);
                 }
                 else {
                     links.resolvedSymbol = unknownSymbol;
@@ -27831,6 +27832,8 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
         let cur: Node = node;
         while (cur.parent) {
             const p: Node = cur.parent;
+            if (p.kind === SyntaxKind.Decorator) return undefined;
+            if (p.kind === SyntaxKind.HeritageClause) return undefined;
             if (p.kind === SyntaxKind.ArrowFunction) {
                 cur = p;
                 continue;
@@ -27857,6 +27860,22 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
             if (cur.kind === SyntaxKind.SourceFile) return undefined;
         }
         return undefined;
+    }
+
+    function checkImplicitThisAccessibility(node: Identifier, prop: Symbol): void {
+        const modFlags = prop.valueDeclaration ? getSelectedEffectiveModifierFlags(prop.valueDeclaration, ModifierFlags.NonPublicAccessibilityModifier) : 0;
+        if (!modFlags) return;
+        const links = getNodeLinks(node);
+        const className = links.implicitThisClassName;
+        let classNode: Node | undefined = node;
+        while (classNode && !(isClassLike(classNode) && (!className || (classNode.name && idText(classNode.name) === className)))) {
+            classNode = classNode.parent;
+        }
+        if (!classNode || !isClassLike(classNode)) return;
+        const classSymbol = getSymbolOfDeclaration(classNode);
+        if (!classSymbol) return;
+        const containingType = links.implicitThisIsStatic ? getTypeOfSymbol(classSymbol) : getDeclaredTypeOfClassOrInterface(classSymbol);
+        checkPropertyAccessibilityAtLocation(node, /*isSuper*/ false, /*writing*/ false, containingType, prop, node);
     }
 
     function lookupImplicitClassMember(classNode: ClassLikeDeclaration, name: __String, isStatic: boolean): Symbol | undefined {
@@ -27957,6 +27976,17 @@ export function createTypeChecker(host: TypeCheckerHost): TypeChecker {
                     const targetPropertyName = isAccessExpression(target) ? getAccessedPropertyName(target) : undefined;
                     if (targetPropertyName !== undefined) {
                         return targetPropertyName === sourcePropertyName && isMatchingReference((source as AccessExpression).expression, (target as AccessExpression).expression);
+                    }
+                    if (
+                        isIdentifier(target) &&
+                        target.escapedText === sourcePropertyName &&
+                        isPropertyAccessExpression(source) &&
+                        source.expression.kind === SyntaxKind.ThisKeyword
+                    ) {
+                        getResolvedSymbol(target);
+                        if (getNodeLinks(target).isImplicitThisReference) {
+                            return true;
+                        }
                     }
                 }
                 if (isElementAccessExpression(source) && isElementAccessExpression(target) && isIdentifier(source.argumentExpression) && isIdentifier(target.argumentExpression)) {
